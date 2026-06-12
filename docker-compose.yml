@@ -1,0 +1,25 @@
+services:
+  kb-ingestor:
+    image: kb-ingestor:latest
+    container_name: kb-ingestor
+    restart: unless-stopped
+    networks:
+      - ai-stack
+    volumes:
+      # Map your NAS bms_kb folder into the container
+      - /mnt/user/bms_docs/bms_kb:/watch:ro
+    environment:
+      # Open WebUI base URL (no trailing slash)
+      OPEN_WEBUI_URL: "http://192.168.0.230:8181"
+      # Get this from Open WebUI → Profile → API Keys
+      OPEN_WEBUI_TOKEN: "${OPEN_WEBUI_TOKEN}"
+      # Get this from Open WebUI → Workspace → Knowledge → BMS Documents → (copy UUID from URL)
+      KNOWLEDGE_BASE_ID: "${KNOWLEDGE_BASE_ID}"
+      # File extensions to watch (comma-separated)
+      ALLOWED_EXTENSIONS: ".md"
+      # Path inside the container (matches the volume mount above)
+      WATCH_DIR: "/watch"
+
+networks:
+  ai-stack:
+    external: true
