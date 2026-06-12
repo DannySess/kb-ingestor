@@ -40,7 +40,11 @@ def file_already_uploaded(filename: str) -> bool:
     try:
         r = requests.get(f"{OPEN_WEBUI_URL}/api/v1/files/", headers=api_headers(), timeout=10)
         r.raise_for_status()
-        existing = [f["filename"] for f in r.json()]
+        data = r.json()
+        if isinstance(data, list):
+            existing = [f["filename"] for f in data if isinstance(f, dict)]
+        else:
+            existing = []
         return filename in existing
     except Exception as e:
         log.warning(f"Could not check existing files: {e}")
