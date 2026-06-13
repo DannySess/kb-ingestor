@@ -40,7 +40,8 @@ def get_kb_filenames():
         r.raise_for_status()
         data = r.json()
         if isinstance(data, list):
-            return {f["meta"]["name"] for f in data if isinstance(f, dict) and "meta" in f}
+            items = data.get("items", data) if isinstance(data, dict) else data
+            return {f["meta"]["name"] for f in items if isinstance(f, dict) and "meta" in f and f["meta"].get("name", "").endswith(".md")}
         return set()
     except Exception as e:
         log.warning(f"Could not fetch KB files: {e}")
