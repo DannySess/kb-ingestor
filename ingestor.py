@@ -186,6 +186,7 @@ def ingest_file(path: Path) -> bool:
         del kb_index[path.name]
 
     # Upload new version
+    time.sleep(0.5)
     file_id = upload_file(path)
     if not file_id:
         return False
