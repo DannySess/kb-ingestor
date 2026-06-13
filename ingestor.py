@@ -34,12 +34,14 @@ def api_headers():
 def get_kb_filenames():
     try:
         r = requests.get(
-            f"{OPEN_WEBUI_URL}/api/v1/knowledge/{KNOWLEDGE_BASE_ID}",
+            f"{OPEN_WEBUI_URL}/api/v1/knowledge/{KNOWLEDGE_BASE_ID}/files",
             headers=api_headers(), timeout=10
         )
         r.raise_for_status()
-        files = r.json().get("files", [])
-        return {f["meta"]["name"] for f in files}
+        data = r.json()
+        if isinstance(data, list):
+            return {f["meta"]["name"] for f in data if isinstance(f, dict) and "meta" in f}
+        return set()
     except Exception as e:
         log.warning(f"Could not fetch KB files: {e}")
         return set()
