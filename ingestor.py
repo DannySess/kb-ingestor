@@ -133,9 +133,21 @@ def startup_scan(watch_dir):
         return
     log.info(f"🔍 Startup scan: found {len(files)} file(s) to process...")
     success = 0
+    failed = []
     for path in files:
-        if ingest_file(path): success += 1
+        if ingest_file(path):
+            success += 1
+        elif path.name not in _kb_files:
+            failed.append(path)
     log.info(f"✅ Startup scan complete: {success}/{len(files)} file(s) ingested.")
+    if failed:
+        log.info(f"🔄 Retrying {len(failed)} failed file(s) in 30 seconds...")
+        time.sleep(30)
+        retry_success = 0
+        for path in failed:
+            if path.name not in _kb_files and ingest_file(path):
+                retry_success += 1
+        log.info(f"✅ Retry complete: {retry_success}/{len(failed)} file(s) ingested.")
 
 def main():
     watch_dir = Path(WATCH_DIR)
