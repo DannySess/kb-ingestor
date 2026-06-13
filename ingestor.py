@@ -12,7 +12,8 @@ from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-# ── Logging ──────────────────────────────────────────────────────────────────
+_kb_files = set()
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -21,22 +22,29 @@ logging.basicConfig(
 )
 log = logging.getLogger("kb-ingestor")
 
-# ── Config from environment ───────────────────────────────────────────────────
-OPEN_WEBUI_URL   = os.environ["OPEN_WEBUI_URL"].rstrip("/")   # e.g. http://192.168.0.230:8181
-OPEN_WEBUI_TOKEN = os.environ["OPEN_WEBUI_TOKEN"]             # API key from Open WebUI profile
-KNOWLEDGE_BASE_ID = os.environ["KNOWLEDGE_BASE_ID"]           # UUID of BMS Documents KB
-WATCH_DIR        = os.environ.get("WATCH_DIR", "/watch")
-ALLOWED_EXTS     = {e.strip().lower() for e in os.environ.get("ALLOWED_EXTENSIONS", ".md").split(",")}
+OPEN_WEBUI_URL    = os.environ["OPEN_WEBUI_URL"].rstrip("/")
+OPEN_WEBUI_TOKEN  = os.environ["OPEN_WEBUI_TOKEN"]
+KNOWLEDGE_BASE_ID = os.environ["KNOWLEDGE_BASE_ID"]
+WATCH_DIR         = os.environ.get("WATCH_DIR", "/watch")
+ALLOWED_EXTS      = {e.strip().lower() for e in os.environ.get("ALLOWED_EXTENSIONS", ".md").split(",")}
 
-
-# ── Open WebUI API helpers ────────────────────────────────────────────────────
-
-def api_headers() -> dict:
+def api_headers():
     return {"Authorization": f"Bearer {OPEN_WEBUI_TOKEN}"}
 
+def get_kb_filenames():
+    try:
+        r = requests.get(
+            f"{OPEN_WEBUI_URL}/api/v1/knowledge/{KNOWLEDGE_BASE_ID}",
+            headers=api_headers(), timeout=10
+        )
+        r.raise_for_status()
+        files = r.json().get("files", [])
+        return {f["meta"]["name"] for f in files}
+    except Exception as e:
+        log.warning(f"Could not fetch KB files: {e}")
+        return set()
 
-def file_already_uploaded(filename: str) -> bool:
-    """Check if a file with this name already exists in Open WebUI files."""
+def file_already_uploaded(filename):
     try:
         r = requests.get(f"{OPEN_WEBUI_URL}/api/v1/files/", headers=api_headers(), timeout=10)
         r.raise_for_status()
@@ -50,9 +58,7 @@ def file_already_uploaded(filename: str) -> bool:
         log.warning(f"Could not check existing files: {e}")
         return False
 
-
-def upload_file(path: Path) -> str | None:
-    """Upload a file to Open WebUI. Returns file_id on success, None on failure."""
+def upload_file(path):
     try:
         with open(path, "rb") as fh:
             r = requests.post(
@@ -69,9 +75,7 @@ def upload_file(path: Path) -> str | None:
         log.error(f"  ❌ Upload failed for {path.name}: {e}")
         return None
 
-
-def add_file_to_knowledge_base(file_id: str, filename: str) -> bool:
-    """Add an already-uploaded file to the BMS Documents knowledge base."""
+def add_file_to_knowledge_base(file_id, filename):
     try:
         r = requests.post(
             f"{OPEN_WEBUI_URL}/api/v1/knowledge/{KNOWLEDGE_BASE_ID}/file/add",
@@ -86,75 +90,56 @@ def add_file_to_knowledge_base(file_id: str, filename: str) -> bool:
         log.error(f"  ❌ Failed to add {filename} to knowledge base: {e}")
         return False
 
-
-def ingest_file(path: Path) -> bool:
-    """Full pipeline: upload file then add to knowledge base."""
+def ingest_file(path):
     if path.suffix.lower() not in ALLOWED_EXTS:
-        log.debug(f"  ⏭  Skipping (not allowed extension): {path.name}")
         return False
-
     log.info(f"📄 Processing: {path.name}")
-
-    if file_already_uploaded(path.name):
-        log.info(f"  ⏭  Already in Open WebUI, skipping: {path.name}")
+    if path.name in _kb_files:
+        log.info(f"  ⏭  Already in KB, skipping: {path.name}")
         return False
-
     file_id = upload_file(path)
     if not file_id:
         return False
-
-    return add_file_to_knowledge_base(file_id, path.name)
-
-
-# ── Watchdog handler ──────────────────────────────────────────────────────────
+    result = add_file_to_knowledge_base(file_id, path.name)
+    if result:
+        _kb_files.add(path.name)
+    return result
 
 class MarkdownHandler(FileSystemEventHandler):
     def on_created(self, event):
-        if event.is_directory:
-            return
+        if event.is_directory: return
         path = Path(event.src_path)
         if path.suffix.lower() in ALLOWED_EXTS:
             log.info(f"🔔 New file detected: {path.name}")
-            # Brief delay to ensure file is fully written before reading
             time.sleep(2)
             ingest_file(path)
-
     def on_moved(self, event):
-        """Handle files moved/renamed into the watch directory."""
-        if event.is_directory:
-            return
+        if event.is_directory: return
         path = Path(event.dest_path)
         if path.suffix.lower() in ALLOWED_EXTS:
             log.info(f"🔔 File moved into watch dir: {path.name}")
             time.sleep(2)
             ingest_file(path)
 
-
-# ── Startup scan ─────────────────────────────────────────────────────────────
-
-def startup_scan(watch_dir: Path):
-    """Process all existing allowed files in the watch directory on startup."""
+def startup_scan(watch_dir):
+    global _kb_files
+    _kb_files = get_kb_filenames()
+    log.info(f"  KB already contains {len(_kb_files)} file(s)")
     files = sorted(p for p in watch_dir.rglob("*") if p.is_file() and p.suffix.lower() in ALLOWED_EXTS)
     if not files:
         log.info("🔍 Startup scan: no existing files found.")
         return
-
     log.info(f"🔍 Startup scan: found {len(files)} file(s) to process...")
     success = 0
     for path in files:
-        if ingest_file(path):
-            success += 1
+        if ingest_file(path): success += 1
     log.info(f"✅ Startup scan complete: {success}/{len(files)} file(s) ingested.")
-
-
-# ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
     watch_dir = Path(WATCH_DIR)
     if not watch_dir.exists():
         log.error(f"Watch directory does not exist: {watch_dir}")
         sys.exit(1)
-
     log.info("=" * 60)
     log.info("kb-ingestor starting")
     log.info(f"  Watch dir:        {watch_dir}")
@@ -162,17 +147,12 @@ def main():
     log.info(f"  Knowledge base:   {KNOWLEDGE_BASE_ID}")
     log.info(f"  Allowed exts:     {ALLOWED_EXTS}")
     log.info("=" * 60)
-
-    # Process existing files first
     startup_scan(watch_dir)
-
-    # Start real-time watcher
     handler = MarkdownHandler()
     observer = Observer()
     observer.schedule(handler, str(watch_dir), recursive=True)
     observer.start()
     log.info(f"👁  Watching for new files in {watch_dir} ...")
-
     try:
         while True:
             time.sleep(5)
@@ -180,7 +160,6 @@ def main():
         log.info("Shutting down...")
         observer.stop()
     observer.join()
-
 
 if __name__ == "__main__":
     main()
