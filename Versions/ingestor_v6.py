@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-kb-ingestor v7: Multi-KB routing, file update detection, config-driven.
+kb-ingestor v6: Multi-KB routing, file update detection, config-driven.
 KB-index only dedup — no stale file store IDs.
 Persistent hash cache survives restarts.
 """
@@ -155,7 +155,8 @@ def upload_file(path: Path) -> str | None:
 
 
 def add_to_kb(file_id: str, kb_id: str, filename: str) -> bool:
-    for attempt in range(2):
+    delays = [3, 8, 20]
+    for attempt, delay in enumerate(delays + [None], 1):
         try:
             r = requests.post(
                 f"{OPEN_WEBUI_URL}/api/v1/knowledge/{kb_id}/file/add",
@@ -167,12 +168,11 @@ def add_to_kb(file_id: str, kb_id: str, filename: str) -> bool:
             log.info(f"  ✅ Added to KB: {filename}")
             return True
         except Exception as e:
-            if attempt == 0:
-                log.warning(f"  ⏳ KB add failed, retrying in 5s...")
-                time.sleep(5)
-            else:
-                resp_text = getattr(e.response, "text", "")[:200] if hasattr(e, "response") else ""
-                log.error(f"  ❌ Failed to add {filename} to KB: {e} | {resp_text}")
+            if delay is None:
+                log.error(f"  ❌ Failed to add {filename} to KB after {len(delays)+1} attempts: {e}")
+                return False
+            log.warning(f"  ⏳ KB add failed (attempt {attempt}), retrying in {delay}s...")
+            time.sleep(delay)
     return False
 
 
@@ -244,39 +244,6 @@ class FileHandler(FileSystemEventHandler):
             ingest_file(path)
 
 
-
-def warmup_kbs():
-    """Upload a tiny dummy file to each KB to initialise Qdrant collections."""
-    log.info("🔥 Warming up KB collections...")
-    dummy_content = b"# KB Warmup\n\nInitialising collection."
-    for folder, kb_id in _kb_mappings.items():
-        try:
-            import io
-            r = requests.post(
-                f"{OPEN_WEBUI_URL}/api/v1/files/",
-                headers=api_headers(),
-                files={"file": ("_warmup.md", io.BytesIO(dummy_content), "text/markdown")},
-                timeout=30,
-            )
-            r.raise_for_status()
-            file_id = r.json()["id"]
-            # Add to KB
-            r2 = requests.post(
-                f"{OPEN_WEBUI_URL}/api/v1/knowledge/{kb_id}/file/add",
-                headers={**api_headers(), "Content-Type": "application/json"},
-                json={"file_id": file_id},
-                timeout=30,
-            )
-            # Delete warmup file regardless of KB add result
-            requests.delete(f"{OPEN_WEBUI_URL}/api/v1/files/{file_id}", headers=api_headers(), timeout=10)
-            if r2.status_code == 200:
-                log.info(f"  ✅ Warmed up: {folder}")
-            else:
-                log.info(f"  ⚠️  KB {folder} may need initialisation")
-        except Exception as e:
-            log.warning(f"  ⚠️  Warmup failed for {folder}: {e}")
-    time.sleep(2)
-
 def startup_scan():
     files = sorted(p for p in WATCH_DIR.rglob("*") if p.is_file() and p.suffix.lower() in ALLOWED_EXTS)
     if not files:
@@ -322,7 +289,7 @@ def main():
     load_hash_cache()
 
     log.info("=" * 60)
-    log.info("kb-ingestor v7 starting")
+    log.info("kb-ingestor v6 starting")
     log.info(f"  Watch dir:   {WATCH_DIR}")
     log.info(f"  Open WebUI:  {OPEN_WEBUI_URL}")
     log.info(f"  Config:      {CONFIG_PATH}")
@@ -331,7 +298,6 @@ def main():
 
     log.info("⏳ Waiting 30s for services to be ready...")
     time.sleep(30)
-    warmup_kbs()
     startup_scan()
 
     handler = FileHandler()
