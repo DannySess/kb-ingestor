@@ -245,6 +245,38 @@ class FileHandler(FileSystemEventHandler):
 
 
 
+def warmup_kbs():
+    """Upload a tiny dummy file to each KB to initialise Qdrant collections."""
+    log.info("🔥 Warming up KB collections...")
+    dummy_content = b"# KB Warmup\n\nInitialising collection."
+    for folder, kb_id in _kb_mappings.items():
+        try:
+            import io
+            r = requests.post(
+                f"{OPEN_WEBUI_URL}/api/v1/files/",
+                headers=api_headers(),
+                files={"file": ("_warmup.md", io.BytesIO(dummy_content), "text/markdown")},
+                timeout=30,
+            )
+            r.raise_for_status()
+            file_id = r.json()["id"]
+            # Add to KB
+            r2 = requests.post(
+                f"{OPEN_WEBUI_URL}/api/v1/knowledge/{kb_id}/file/add",
+                headers={**api_headers(), "Content-Type": "application/json"},
+                json={"file_id": file_id},
+                timeout=30,
+            )
+            # Delete warmup file regardless of KB add result
+            requests.delete(f"{OPEN_WEBUI_URL}/api/v1/files/{file_id}", headers=api_headers(), timeout=10)
+            if r2.status_code == 200:
+                log.info(f"  ✅ Warmed up: {folder}")
+            else:
+                log.info(f"  ⚠️  KB {folder} may need initialisation")
+        except Exception as e:
+            log.warning(f"  ⚠️  Warmup failed for {folder}: {e}")
+    time.sleep(2)
+
 def startup_scan():
     files = sorted(p for p in WATCH_DIR.rglob("*") if p.is_file() and p.suffix.lower() in ALLOWED_EXTS)
     if not files:
@@ -299,6 +331,7 @@ def main():
 
     log.info("⏳ Waiting 30s for services to be ready...")
     time.sleep(30)
+    warmup_kbs()
     startup_scan()
 
     handler = FileHandler()
