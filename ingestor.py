@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-kb-ingestor v4: Multi-KB routing, file update detection, config-driven.
+kb-ingestor v5: Multi-KB routing, file update detection, config-driven.
 KB-index only dedup — no stale file store IDs.
+Persistent hash cache survives restarts.
 """
 
 import os
@@ -35,6 +36,28 @@ _config      = {}
 _kb_mappings = {}   # folder -> kb_id
 _kb_index    = {}   # kb_id -> {filename -> file_id}
 _file_hashes = {}   # str(path) -> md5
+
+HASH_CACHE_PATH = Path(os.environ.get("CONFIG_PATH", "/config/kb_config.json")).parent / "kb_hashes.json"
+
+
+def load_hash_cache():
+    global _file_hashes
+    try:
+        if HASH_CACHE_PATH.exists():
+            _file_hashes = json.loads(HASH_CACHE_PATH.read_text())
+            log.info(f"  Hash cache loaded: {len(_file_hashes)} entries")
+        else:
+            log.info("  No hash cache found, starting fresh")
+    except Exception as e:
+        log.warning(f"  Could not load hash cache: {e}")
+        _file_hashes = {}
+
+
+def save_hash_cache():
+    try:
+        HASH_CACHE_PATH.write_text(json.dumps(_file_hashes))
+    except Exception as e:
+        log.warning(f"  Could not save hash cache: {e}")
 
 
 def load_config():
@@ -181,6 +204,7 @@ def ingest_file(path: Path) -> bool:
     if add_to_kb(file_id, kb_id, path.name):
         kb_idx[path.name] = file_id
         _file_hashes[str(path)] = curr_hash
+        save_hash_cache()
         return True
 
     # KB add failed — clean up the uploaded file
@@ -256,9 +280,10 @@ def main():
         sys.exit(1)
 
     load_config()
+    load_hash_cache()
 
     log.info("=" * 60)
-    log.info("kb-ingestor v4 starting")
+    log.info("kb-ingestor v5 starting")
     log.info(f"  Watch dir:   {WATCH_DIR}")
     log.info(f"  Open WebUI:  {OPEN_WEBUI_URL}")
     log.info(f"  Config:      {CONFIG_PATH}")
