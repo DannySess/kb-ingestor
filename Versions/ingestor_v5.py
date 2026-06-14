@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-kb-ingestor v6: Multi-KB routing, file update detection, config-driven.
+kb-ingestor v5: Multi-KB routing, file update detection, config-driven.
 KB-index only dedup — no stale file store IDs.
 Persistent hash cache survives restarts.
 """
@@ -155,25 +155,19 @@ def upload_file(path: Path) -> str | None:
 
 
 def add_to_kb(file_id: str, kb_id: str, filename: str) -> bool:
-    delays = [3, 8, 20]
-    for attempt, delay in enumerate(delays + [None], 1):
-        try:
-            r = requests.post(
-                f"{OPEN_WEBUI_URL}/api/v1/knowledge/{kb_id}/file/add",
-                headers={**api_headers(), "Content-Type": "application/json"},
-                json={"file_id": file_id},
-                timeout=30,
-            )
-            r.raise_for_status()
-            log.info(f"  ✅ Added to KB: {filename}")
-            return True
-        except Exception as e:
-            if delay is None:
-                log.error(f"  ❌ Failed to add {filename} to KB after {len(delays)+1} attempts: {e}")
-                return False
-            log.warning(f"  ⏳ KB add failed (attempt {attempt}), retrying in {delay}s...")
-            time.sleep(delay)
-    return False
+    try:
+        r = requests.post(
+            f"{OPEN_WEBUI_URL}/api/v1/knowledge/{kb_id}/file/add",
+            headers={**api_headers(), "Content-Type": "application/json"},
+            json={"file_id": file_id},
+            timeout=30,
+        )
+        r.raise_for_status()
+        log.info(f"  ✅ Added to KB: {filename}")
+        return True
+    except Exception as e:
+        log.error(f"  ❌ Failed to add {filename} to KB: {e}")
+        return False
 
 
 def ingest_file(path: Path) -> bool:
@@ -289,15 +283,13 @@ def main():
     load_hash_cache()
 
     log.info("=" * 60)
-    log.info("kb-ingestor v6 starting")
+    log.info("kb-ingestor v5 starting")
     log.info(f"  Watch dir:   {WATCH_DIR}")
     log.info(f"  Open WebUI:  {OPEN_WEBUI_URL}")
     log.info(f"  Config:      {CONFIG_PATH}")
     log.info(f"  KB mappings: {list(_kb_mappings.keys())}")
     log.info("=" * 60)
 
-    log.info("⏳ Waiting 30s for services to be ready...")
-    time.sleep(30)
     startup_scan()
 
     handler = FileHandler()
